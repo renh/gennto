@@ -17,7 +17,6 @@ Generate a Gaussian fchk file contains Natural Transition Orbital information.
 from __future__ import print_function
 import argparse
 import numpy as np
-import gzip
 
 parser = argparse.ArgumentParser()
 parser.add_argument('-l', '--log',
@@ -55,39 +54,31 @@ print("==================================================")
 print("I am gnerating NTO for electronic transition # {}".format(root))
 print("==================================================")
 
-# the Gaussian log file usually has large size in plain text
-# we can treat with the gzip compressed version
-gzipped = log_name.endswith('gz')
-if gzipped:
-    fopen = gzip.GzipFile
-else:
-    fopen = open
 
 def get_NBasis(fname):
-    pattern = b' NBasis'
-    with fopen(fname) as fh:
+    pattern = ' NBasis'
+    with open(fname) as fh:
         while True:
             line = fh.readline()
             if line.startswith(pattern):
                 break
-        NBasis = int(line.decode().split()[1])
+        NBasis = int(line.split()[1])
         line = fh.readline()
-        NBsUse = int(line.decode().split()[1])
+        NBsUse = int(line.split()[1])
     return NBasis, NBsUse
 
 NBasis, NBsUse = get_NBasis(log_name)
-print(NBasis, NBsUse)
-raise SystemExit
+print("NBasis = {}, NBsUse = {}".format(NBasis, NBsUse))
 
 
 def get_restricted(fname):
-    pattern = b' Excited State   1'
-    with fopen(fname) as fh:
+    pattern = ' Excited State   1'
+    with open(fname) as fh:
         while True:
             line = fh.readline()
             if line.startswith(pattern):
                 break
-        line = fh.readline().decode()
+        line = fh.readline()
     if 'A' in line or 'B' in line:
         return False
     else:
@@ -104,52 +95,53 @@ else:
     nspin = 2
 
 def get_Nocc(fname):
-    pattern = b'alpha electrons'
-    with fopen(fname) as fh:
+    pattern = 'alpha electrons'
+    with open(fname) as fh:
         while True:
             line = fh.readline()
             if pattern in line:
                 break
-    info = line.decode().split()[::3]
+    info = line.split()[::3]
     Nocc = [int(x) for x in info]
     return np.array(Nocc)
 
 Nocc = get_Nocc(log_name)
-Nvir = NBasis - Nocc
+Nvir = NBsUse - Nocc
+print("  {} occupied alpha orbs, {} virtual alpha orbs".format(Nocc[0], Nvir[0]))
+print("  {} occupied  beta orbs, {} virtual  beta orbs".format(Nocc[0], Nvir[0]))
 
 # parse T-matrix from Gaussian log
 pattern = ' Excited State{:4d}'.format(root)
-pattern = pattern.encode()
+#pattern = pattern.encode()
 Ta = np.zeros([Nocc[0], Nvir[0]])
 print('NBasis =', NBasis)
 print('Nocc = ', Nocc)
 print('Nvir = ', Nvir)
 print(Ta.shape)
-print("Parsing T-matrix for excited state #{}".format(root))
+print("\nParsing T-matrix for excited state #{}".format(root))
 if not restricted:
     Tb = np.zeros([Nocc[1], Nvir[1]])
-with fopen(log_name) as fh:
+with open(log_name) as fh:
     while True:
         line = fh.readline()
         if line.startswith(pattern):
             break
     while True:
         line = fh.readline()
-        if not b'->' in line:
+        if not '->' in line:
             break
-        line = line.decode()
         occ_ends = 8 if restricted else 7
         iocc = int(line[:occ_ends]) - 1
-        ivir = int(line[11:14]) - 1
+        ivir = int(line[11:16]) - 1
         if 'B' in line:
             ivir -= Nocc[1]
             Tb[iocc, ivir] = float(line[19:])
         else:
             ivir -= Nocc[0]
             Ta[iocc, ivir] = float(line[19:])
-print("T-matrix parsed.")
-#print("max element in T: ", np.max(np.abs(Tb)))
-#print('index for max element in T: ', np.argmax(np.abs(Tb)))
+print("  T-matrix parsed.")
+print("  max element in T: ", np.max(np.abs(Ta)))
+print('  index for max element in T: {}\n'.format(np.argmax(np.abs(Ta))))
 
 # parse MO coefficients from fchk
 with open(fchk_name) as fh:
@@ -159,12 +151,10 @@ with open(fchk_name) as fh:
         if line.startswith('Alpha MO coefficients'):
             break
     Ndata = int(line.split()[-1])
-    if (NBasis * NBasis) != Ndata:
+    if (NBasis * NBsUse) != Ndata:
         print("Read MO coefficients error:")
-        print("   NBasis * NBasis = {}".format(NBasis*NBasis))
+        print("   NBasis * NBsUse = {}".format(NBasis*NBsUse))
         print("     NData in file = {}".format(Ndata))
-        print("This might be caused by the number of orbitals is different from NBasis")
-        print("  check diffuse basis function related issues")
         raise ValueError
     MOC = []
     if Ndata % 5:
@@ -174,8 +164,8 @@ with open(fchk_name) as fh:
     for ib in range(nblock):
         line = fh.readline()
         MOC.extend([float(x) for x in line.split()])
-    MOC_alpha = np.array(MOC).reshape([NBasis,NBasis], order='F')
-    print("alpha MO coeff parsed")
+    MOC_alpha = np.array(MOC).reshape([NBasis,NBsUse], order='F')
+    print("\nalpha MO coeff parsed")
 
     if not restricted:
         # beta orbitals
@@ -188,8 +178,8 @@ with open(fchk_name) as fh:
         for ib in range(nblock):
             line = fh.readline()
             MOC.extend([float(x) for x in line.split()])
-        MOC_beta = np.array(MOC).reshape([NBasis, NBasis], order='F')
-        print('beta MO coeff parsed')
+        MOC_beta = np.array(MOC).reshape([NBasis, NBsUse], order='F')
+        print('\nbeta MO coeff parsed')
 
 # parse orbital energies from fchk
 with open(fchk_name) as fh:
@@ -199,8 +189,8 @@ with open(fchk_name) as fh:
         if line.startswith('Alpha Orbital Energies'):
             break
     Ndata = int(line.split()[-1])
-    if Ndata != NBasis:
-        print('No. energies not equal to No. basis')
+    if Ndata != NBsUse:
+        print('No. energies not equal to NBsUse')
         print(' check diffuse basis function related issues')
     if Ndata % 5:
         nblock = Ndata // 5 + 1
@@ -224,6 +214,8 @@ with open(fchk_name) as fh:
             line = fh.readline()
             MOE.extend([float(x) for x in line.split()])
         MOE_beta = np.array(MOE)
+
+print('\nOrbital energies read')
 
 
     
